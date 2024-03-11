@@ -26,18 +26,20 @@ dummy_init(void)
 {
 	struct net_device *dev;
 
+	// デバイスを生成する
 	dev = net_device_alloc();
 	if (!dev) {
 		errorf("net_device_alloc() failure");
 		return NULL;
 	}
 
-	dev->type = NET_DEVICE_TYPE_DUMMY;
-	dev->mtu = DUMMY_MTU;
+	dev->type = NET_DEVICE_TYPE_DUMMY; // net.hで定義されている
+	dev->mtu = DUMMY_MTU;	// 上で定義
 	dev->hlen = 0;
-	dev->alen = 0;
-	dev->ops = &dummy_ops;
+	dev->alen = 0;	// ヘッダーもアドレスもなし
+	dev->ops = &dummy_ops; // デバイスドライバが実装している関数のアドレスを保持する構造体へのポインタを設定する。
 
+	// デバイスを登録する
 	if (net_device_register(dev) == -1) {
 		errorf("net_device_register() failure");
 		return NULL;
