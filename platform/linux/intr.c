@@ -6,6 +6,7 @@
 #include "platform.h"
 
 #include "util.h"
+#include "net.h"
 
 // 割り込み要求（IRQ）の構造体（デバイスと同様にリスト構造で管理する）
 struct irq_entry {
@@ -100,6 +101,10 @@ intr_thread(void*arg) // 割り込みスレッドのエントリポイント
          terminate = 1; // SIGHUP割り込みスレッドへ終了を通知するためのシグナル（terminateを1にしてループを抜ける）
          break;
       
+      case SIGUSR1:
+         net_softirq_handler(); // ソフトウェア割り込み用のシグナルを補足した場合の処理を追加する
+         break;
+
       default:
          // デバイス割り込み用のシグナル
          for (entry = irqs; entry; entry=entry->next) { // IRQリストを巡回する
@@ -171,6 +176,9 @@ intr_init(void)
 
    // シグナル集合にSIGHUPを追加する（割り込みスレッド終了通知用）
    sigaddset(&sigmask, SIGHUP);
+
+   // シグナル集合にSIGUSR1を追加する
+   sigaddset(&sigmask, SIGUSR1);
 
    return 0;
 }
