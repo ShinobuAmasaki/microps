@@ -262,6 +262,7 @@ net_input_handler(uint16_t type, const uint8_t *data, size_t len, struct net_dev
 	}
 	/* unsupported protocol */
 	/* プロトコルが見つからなかったら、黙って捨てる*/
+	infof("dropped, type=0x%04x", type);
 	return 0;
 }
 
