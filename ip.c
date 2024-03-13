@@ -298,8 +298,8 @@ ip_input(const uint8_t*data, size_t len, struct net_device*dev)
    /* Exercise 9-3: プロトコルの検索 */
    for (proto = protocols; proto; proto = proto->next) {
       if (hdr->protocol == proto->type) {
-         // proto->handler(hdr+1, len-hlen, hdr->src, hdr->dst, iface);
-         proto->handler((uint8_t *)hdr+hlen, total - hlen, hdr->src, hdr->dst, iface);
+         // proto->handler(hdr+1, len-hlen, hdr->src, hdr->dst, iface); // 間違い
+         proto->handler((uint8_t *)hdr+hlen, total - hlen, hdr->src, hdr->dst, iface); // 正解
          return;
       }
    }
