@@ -8,6 +8,7 @@
 #include "util.h"
 #include "net.h"
 #include "ip.h"
+#include "icmp.h"
 
 struct net_protocol {
 	struct net_protocol *next; // 次のプロトコルへのポインタ
@@ -338,6 +339,12 @@ net_init(void)
 	// プロトコルスタック初期化時にIPの初期化関数を呼び出す
 	if (ip_init() == -1) {
 		errorf("ip_init() failure");
+		return -1;
+	}
+
+	// ICMPの初期化関数を呼び出す。
+	if (icmp_init() == -1) {
+		errorf("icmp_init() failure");
 		return -1;
 	}
 
