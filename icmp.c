@@ -151,7 +151,7 @@ icmp_output(uint8_t type, uint8_t code, uint32_t values, const uint8_t *data, si
    icmp_dump((uint8_t *)hdr, msg_len);
 
    /* Exercise 11-2: IPの出力関数を呼び出してメッセージを送信する*/
-   return ip_output(IP_PROTOCOL_ICMP, buf, msg_len, src, dst);
+   return ip_output(IP_PROTOCOL_ICMP, (uint8_t *)hdr, msg_len, src, dst);
 }
 
 int
