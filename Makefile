@@ -26,6 +26,7 @@ TESTS = test/step0.exe \
 	test/step13.exe \
 	test/step14.exe \
 	test/step15.exe \
+	test/step16.exe \
 
 CFLAGS := $(CFLAGS) -g -W -Wall -Wno-unused-parameter -iquote .
 

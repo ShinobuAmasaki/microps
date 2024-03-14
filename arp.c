@@ -20,6 +20,7 @@
 #define ARP_OP_REPLY   2
 
 #define ARP_CACHE_SIZE 32
+#define ARP_CACHE_TIMEOUT 30 /* seconds */
 
 #define ARP_CACHE_STATE_FREE       0 
 #define ARP_CACHE_STATE_INCOMPLETE 1
@@ -380,9 +381,41 @@ arp_input(const uint8_t *data, size_t len, struct net_device *dev)
    }
 }
 
+static void
+arp_timer_handler(void)
+{
+   struct arp_cache *entry;
+   struct timeval now, diff;
+
+   mutex_lock(&mutex);
+   gettimeofday(&now, NULL);
+   for (entry = caches; entry < tailof(caches); entry++) {
+      // 未使用のエントリと静的エントリは除外する
+      if (entry->state != ARP_CACHE_STATE_FREE && entry->state != ARP_CACHE_STATE_STATIC) {
+         /* Exercise 16-3: タイムアウトしたエントリの削除 */
+         timersub(&now, &entry->timestamp, &diff);
+         // タイムアウト時間
+         if (diff.tv_sec > ARP_CACHE_TIMEOUT) {
+            arp_cache_delete(entry);
+         }
+         // Exerciseここまで
+      }
+   }
+   mutex_unlock(&mutex);
+}
+
 int
 arp_init(void)
 {
+   struct timeval interval = {1, 0};  /* 1s */ // ARPのタイマーハンドラを呼び出す際のインターバル
+
+   /* Exercise 16-4: ARPのタイマーハンドラを登録する*/
+   if (net_timer_register(interval, arp_timer_handler) == -1) {
+      errorf("net_timer_register() failure");
+      return -1;
+   }
+   /* Exerciseここまで */
+
    /* Exercise 13-4: プロトコルスタックにARPを登録する */
    // 分からなかった
    if (net_protocol_register(NET_PROTOCOL_TYPE_ARP, arp_input) == -1) {

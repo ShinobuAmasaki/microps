@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "platform.h"
 
@@ -25,6 +26,14 @@ struct net_protocol_queue_entry {
 	uint8_t data[];
 };
 
+// タイマーの構造体
+struct net_timer {
+	struct net_timer *next;  // 次のタイマーへのポインタ
+	struct timeval interval; // 発火のインターバル
+	struct timeval last;		 // 最後の発火時間
+	void (*handler)(void);	 // 発火時に呼び出す関数へのポインタ
+};
+
 /* NOTE: if you want to add/delete the entries after net_run(), you need to protect these lists with a mutex. */
 
 // デバイスリスト（リストの先頭を指すポインタ）
@@ -32,6 +41,9 @@ static struct net_device *devices;
 
 // 登録されているプロトコルのリスト（グローバル変数）
 static struct net_protocol *protocols;
+
+// タイマーリスト
+static struct net_timer *timers;
 
 struct net_device *
 net_device_alloc(void)
@@ -69,6 +81,49 @@ net_device_register(struct net_device *dev)
 	// infoメッセージを出力する。
 	infof("registered, dev=%s, type=0x%04x", dev->name, dev->type);
 	
+	return 0;
+}
+
+/* NOTE: must not be call after net_run() */
+int
+net_timer_register(struct timeval interval, void (*handler)(void))
+{
+	struct net_timer *timer;
+
+	/* Exercise 16-1: タイマーの登録 */
+	timer = memory_alloc(sizeof(*timer));
+	if (!timer) {
+		errorf("memory_alloc() failure");
+		return -1;
+	}
+
+	gettimeofday(&timer->last, NULL);
+	timer->interval = interval;
+	timer->handler = handler;
+	
+	timer->next = timers;
+	timers = timer;
+	/* Exercise ここまで */
+
+	infof("registered: interval={%d, %d}", interval.tv_sec, interval.tv_usec);
+	return 0;
+}
+
+int
+net_timer_handler(void)
+{
+	struct net_timer *timer;
+	struct timeval now, diff;
+
+	for (timer = timers; timer; timer = timer->next) {
+		gettimeofday(&now, NULL);
+		timersub(&now, &timer->last, &diff);
+		if (timercmp(&timer->interval, &diff, <) != 0) { // true (!0) or false(0) // 発火時刻を迎えているかどうか
+			// Exercise 16-2: タイマーの発火
+			timer->handler();
+			gettimeofday(&timer->last, NULL);
+		}
+	}
 	return 0;
 }
 
