@@ -327,7 +327,7 @@ ip_output_device(struct ip_iface *iface, const uint8_t *data, size_t len, ip_add
    }
    // Exercise 8-4: デバイスからの送信
    // return net_device_output(NET_IFACE(iface)->dev, NET_DEVICE_TYPE_LOOPBACK, data, len, &dst); // 間違い
-   return net_device_output(NET_IFACE(iface)->dev, NET_PROTOCOL_TYPE_IP, data, len, &dst); // 正解
+   return net_device_output(NET_IFACE(iface)->dev, NET_PROTOCOL_TYPE_IP, data, len, hwaddr); // 正解 // &dst => hwaddrに書き換え
    // Exerciseここまで
 }
 
