@@ -290,6 +290,7 @@ static void
 tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uint8_t *data, size_t len, struct ip_endpoint *local, struct ip_endpoint *foreign)
 {
    struct tcp_pcb *pcb;
+   int acceptable = 0;
 
    pcb = tcp_pcb_select(local, foreign);
    if (!pcb || pcb->state == TCP_PCB_STATE_CLOSED) { // 使用していないポート宛に届いたTCPセグメントの処理
@@ -386,6 +387,46 @@ tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uint8_t *data, 
    /*
     * 1st check sequence number
     */
+   switch (pcb->state)
+   {
+   case TCP_PCB_STATE_SYN_RECEIVED:
+   case TCP_PCB_STATE_ESTABLISHED:
+      if (!seg->len) { // 受信セグメントにデータが含まれているかどうか
+         if (!pcb->rcv.wnd) {// 受信バッファに空きがあるかどうか
+            if (seg->seq == pcb->rcv.nxt) { // 次に期待しているシーケンス番号と一致するかどうか
+               acceptable = 1;
+            }
+         } else {
+            if (pcb->rcv.nxt <= seg->seq && seg->seq < pcb->rcv.nxt + pcb->rcv.wnd) {
+               acceptable = 1;
+            }
+         }
+      } else {
+         if (!pcb->rcv.wnd) { // 受信バッファに空きがあるかどうか
+            /* not acceptable */
+         } else {
+            if ((pcb->rcv.nxt <= seg->seq && seg->seq < pcb->rcv.nxt + pcb->rcv.wnd) ||
+                (pcb->rcv.nxt <= seg->seq + seg->len - 1 && seg->seq + seg->len - 1 < pcb->rcv.nxt + pcb->rcv.wnd)) {
+                  acceptable = 1;
+            }
+         }
+      }
+      if (!acceptable) {
+         if (!TCP_FLG_ISSET(flags, TCP_FLG_RST)) {
+            tcp_output(pcb, TCP_FLG_ACK, NULL, 0);
+         }
+         return;
+      }
+      /*
+       * In the following it is assumed that the segment is the idealized
+       * segment that begins at RCV.NXT and does not exceed the window.
+       * One could tailor actual segments to fit this assumption by
+       * trimming off any portions that lie outside the window (including
+       * SYN and FIN), and only processing further if the segment then
+       * begins at RCV.NXT. Segments with higher begining sequence
+       * numbers may be held for later processing.
+       */
+   }
 
    /*
     * 2nd check the RST bit
@@ -417,9 +458,27 @@ tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uint8_t *data, 
             // 相手が次に期待しているシーケンス番号（seg->ack）を設定する
          return;
       }
+      /* fall through */
+   case TCP_PCB_STATE_ESTABLISHED:
+      if (pcb->snd.una < seg->ack && seg->ack <= pcb->snd.nxt) { // まだACKを受け取っていない送信データに対するACKかどうか
+         pcb->snd.una = seg->ack;
+         /* TODO: Any segments on the retransmission queue which are thereby entirely acknowledged are removed */
+         /* ignore: Users should receive positive acknowledgements for buffers
+                    which have been SENT and fully acknowledged (i.e., SEND buffer should be returned with 'ok' response) */
+         if (pcb->snd.wl1 < seg->seq || (pcb->snd.wl1 == seg->seq && pcb->snd.wl2 <= seg->ack)) {
+            // 最後にウィンドウの情報を更新したときよりもあとに送信されたセグメントかどうか
+            pcb->snd.wnd = seg->wnd; // ウィンドウの情報を更新する
+            pcb->snd.wl1 = seg->seq;
+            pcb->snd.wl2 = seg->ack;
+         }
+      } else if (seg->ack < pcb->snd.una) {
+         /* ignore */ // すでに確認済みの範囲に対するACK
+      } else if (seg->ack > pcb->snd.nxt) {
+         tcp_output(pcb, TCP_FLG_ACK, NULL, 0); //範囲外（まだ送信していないシーケンス番号）へのACK
+         return;
+      }
       break;
-   }
-   
+   } 
 
    /*
     * 6th, check the URG bit (ignore)
@@ -428,6 +487,19 @@ tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uint8_t *data, 
    /*
     * 7th, process the segment text
     */
+   switch (pcb->state)
+   {
+   case TCP_PCB_STATE_ESTABLISHED:
+      if (len) {
+         //受信データをバッファにコピーしてACKを返す
+         memcpy(pcb->buf + (sizeof(pcb->buf) - pcb->rcv.wnd), data, len);
+         pcb->rcv.nxt = seg->seq + seg->len; // 次に期待するシーケンス番号を更新する
+         pcb->rcv.wnd -= len;//データを格納した分だけウィンドウサイズを小さくする
+         tcp_output(pcb, TCP_FLG_ACK, NULL, 0); // 確認応答（ACK）を送信
+         sched_wakeup(&pcb->ctx); // 休止中のタスクを起床させる
+      }
+      break;
+   }
 
    /*
     * 8th, check the FIN bit
@@ -523,11 +595,18 @@ event_handler(void *arg)
 int
 tcp_init(void)
 {
+   struct timeval interval = {0, 1000000};
+
    // Exercise 22-1: IPの上位プロトコルとしてTCPを登録する
    if (ip_protocol_register(IP_PROTOCOL_TCP, tcp_input) == -1) {
       errorf("ip_protocol_register() failure");
       return -1;
    }
+   // if (net_timer_register("TCP Timer", interval, tcp_timer) == -1) {
+   //    errorf("net_timer_register() failure");
+   //    return -1;
+   // }
+   net_event_subscribe(event_handler, NULL);
    return 0;
 }
 
@@ -611,4 +690,110 @@ tcp_close(int id)
    tcp_pcb_release(pcb);
    mutex_unlock(&mutex);
    return 0;
+}
+
+ssize_t
+tcp_send(int id, uint8_t *data, size_t len)
+{
+   struct tcp_pcb *pcb;
+   ssize_t sent = 0;
+   struct ip_iface *iface;
+   size_t mss, cap, slen;
+
+   mutex_lock(&mutex);
+   pcb = tcp_pcb_get(id);
+   if (!pcb) {
+      errorf("pcb not found");
+      mutex_unlock(&mutex);
+      return -1;
+   }
+RETRY:
+   switch (pcb->state)
+   {
+   case TCP_PCB_STATE_ESTABLISHED:
+      iface = ip_route_get_iface(pcb->foreign.addr); // 送信に使われるインタフェースを取得する
+      if (!iface) {
+         errorf("iface not found");
+         mutex_unlock(&mutex);
+         return -1;
+      }
+      mss = NET_IFACE(iface)->dev->mtu - (IP_HDR_SIZE_MIN + sizeof(struct tcp_hdr)); //MSSを計算
+      while (sent < (ssize_t)len) { // すべてを送信し切るまでループする
+         cap = pcb->snd.wnd - (pcb->snd.nxt - pcb->snd.una); // 相手の受信バッファの状況を予測する
+         if (!cap) {//相手の受信バッファが埋まっていたら空くまで待つ
+            if (sched_sleep(&pcb->ctx, &mutex, NULL) == -1) {
+               debugf("interrupted");
+               if (!sent) { // まだ何も送信していない状態でユーザー割り込みにより処理を中断する
+                  mutex_unlock(&mutex);
+                  errno = EINTR;
+                  return -1;
+               }
+               break;
+            }
+            goto RETRY;
+         }
+         slen = MIN(MIN(mss, len - sent), cap); // MSSのサイズで分割して送信する
+         if (tcp_output(pcb, TCP_FLG_ACK | TCP_FLG_PSH, data + sent, slen) == -1) {
+            errorf("tcp_output() failure");
+            pcb->state = TCP_PCB_STATE_CLOSED;
+            tcp_pcb_release(pcb);
+            mutex_unlock(&mutex);
+            return -1;
+         }
+         pcb->snd.nxt += slen; // 次に送信するシーケンス番号を更新する
+         sent += slen;
+      }
+      break;
+   
+   default:
+      errorf("unknown state '%u'", pcb->state);
+      mutex_unlock(&mutex);
+      return -1;   
+   }
+   mutex_unlock(&mutex);
+   return sent;
+}
+
+ssize_t
+tcp_receive(int id, uint8_t *buf, size_t size)
+{
+   struct tcp_pcb *pcb;
+   size_t remain, len;
+
+   mutex_lock(&mutex);
+   pcb = tcp_pcb_get(id);
+   if (!pcb) {
+      errorf("pcb not found");
+      mutex_unlock(&mutex);
+      return -1;
+   }
+RETRY:
+   switch (pcb->state)
+   {
+   case TCP_PCB_STATE_ESTABLISHED:
+      remain = sizeof(pcb->buf) - pcb->rcv.wnd;
+      if (!remain) {//受信バッファにデータが存在しない場合はタスクを休止する
+         if (sched_sleep(&pcb->ctx, &mutex, NULL) == -1) {
+            //まだ何も受信していない状態でユーザー割り込みにより処理を中断する
+            debugf("interrupted");
+            mutex_unlock(&mutex);
+            errno = EINTR;
+            return -1;
+         }
+         goto RETRY; // 状態が変わっている可能性もあるため状態確認から再試行する
+      }
+      break;
+   default:
+      errorf("unknown state '%u'", pcb->state);
+      mutex_unlock(&mutex);
+      return -1;
+   }
+   // bufに収まる分だけコピーする
+   len = MIN(size, remain);
+   memcpy(buf, pcb->buf, len);
+   // コピー済みのデータを受信バッファから消す
+   memmove(pcb->buf, pcb->buf + len, remain - len);
+   pcb->rcv.wnd += len;
+   mutex_unlock(&mutex);
+   return len;
 }
